@@ -1,0 +1,21 @@
+# Blueprint для Render. На Render: New → Blueprint → подключить этот репозиторий.
+# Render прочитает файл и создаст сервис; секреты (sync:false) попросит ввести в дашборде.
+services:
+  - type: web
+    name: oshka-onboarding-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: APPS_SCRIPT_URL
+        sync: false
+      - key: APPS_SCRIPT_SECRET
+        sync: false
+      - key: COURSE_URL
+        value: https://oshka-onboarding.netlify.app

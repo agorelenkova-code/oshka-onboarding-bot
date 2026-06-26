@@ -1,0 +1,7 @@
+.env
+progress.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+service-account.json
