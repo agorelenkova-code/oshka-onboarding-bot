@@ -18,6 +18,8 @@ import hmac
 import json
 import logging
 import os
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qsl
 
@@ -51,9 +53,26 @@ log = logging.getLogger("onboarding-bot")
 
 # --- Настройки (берём из переменных окружения) ------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-COURSE_URL = os.environ.get("COURSE_URL", "https://example.netlify.app")
+COURSE_URL = os.environ.get("COURSE_URL", "https://example.netlify.app").rstrip("/")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0") or "0")
 PORT = int(os.environ.get("PORT", "8080"))
+REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "10"))  # час рассылки, МСК
+CRON_SECRET = os.environ.get("APPS_SCRIPT_SECRET", "")      # защита ручного триггера
+
+MSK = timezone(timedelta(hours=3))
+FOLLOWUP_GAP_DAYS = 2  # повторное напоминание через N дней, если урок не пройден
+
+# Порядок уроков, их день по расписанию и название
+LESSON_ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 14, 15, 16]
+LESSON_DAY = {1: 1, 2: 2, 3: 3, 4: 5, 5: 7, 6: 10, 7: 14, 8: 20,
+              9: 22, 13: 35, 14: 38, 15: 42, 16: 45}
+LESSON_TITLE = {
+    1: "Добро пожаловать", 2: "Входим на платформу", 3: "Покоряем Zoom",
+    4: "Познакомься с куратором", 5: "Первые уроки", 6: "Тесты и оценки",
+    7: "Самопроверка", 8: "Письменные домашки", 9: "Загружаем документы",
+    13: "Порядок аттестации", 14: "Правила аттестации", 15: "Доклады и рефераты",
+    16: "Стратегия аттестации",
+}
 
 if not BOT_TOKEN:
     raise SystemExit("Не задан BOT_TOKEN. Смотри .env.example / README.md")
@@ -184,11 +203,116 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "service": "onboarding-bot"})
 
 
+# --- Напоминания по расписанию -------------------------------------------
+def _parse_start(value) -> Optional["datetime.date"]:
+    if not value:
+        return None
+    s = str(value).strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+async def send_reminder(chat_id: int, lesson: int, kind: str) -> bool:
+    url = f"{COURSE_URL}/task-{lesson}.html"
+    title = LESSON_TITLE.get(lesson, "урок")
+    day = LESSON_DAY.get(lesson, "?")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="▶️ Открыть урок", web_app=WebAppInfo(url=url))
+    ]])
+    head = "👋 Напоминаем" if kind == "due" else "🙌 Ещё раз напомним"
+    text = (
+        f"{head}: пора пройти урок онбординга\n"
+        f"<b>День {day} — {title}</b>\n\n"
+        "Нажми кнопку ниже, чтобы открыть 👇"
+    )
+    try:
+        await bot.send_message(chat_id, text, reply_markup=kb)
+        return True
+    except Exception as e:  # человек мог не нажимать Start / заблокировать бота
+        log.warning("Напоминание %s не отправлено: %s", chat_id, e)
+        return False
+
+
+async def run_reminders() -> int:
+    """Один проход рассылки. Возвращает число отправленных напоминаний."""
+    users = await storage.fetch_users()
+    today = datetime.now(MSK).date()
+    sent = 0
+    for u in users:
+        try:
+            chat_id = int(u.get("user_id"))
+        except (TypeError, ValueError):
+            continue
+        start = _parse_start(u.get("start"))
+        if not start:
+            continue
+        day_num = (today - start).days + 1
+        done = {str(x) for x in u.get("done", [])}
+        sent_keys = set(re.split(r"[\s,;]+", str(u.get("reminders", "")).strip()))
+
+        # ищем самый ранний НЕпройденный урок, чей день уже наступил
+        target = None
+        for n in LESSON_ORDER:
+            if str(n) in done:
+                continue
+            if day_num >= LESSON_DAY[n]:
+                target = n
+            break
+        if target is None:
+            continue
+
+        due_key = f"L{target}:due"
+        follow_key = f"L{target}:follow"
+        if due_key not in sent_keys:
+            key, kind = due_key, "due"
+        elif (day_num >= LESSON_DAY[target] + FOLLOWUP_GAP_DAYS
+              and follow_key not in sent_keys):
+            key, kind = follow_key, "follow"
+        else:
+            continue
+
+        if await send_reminder(chat_id, target, kind):
+            await storage.mark_reminder(str(chat_id), key)
+            sent += 1
+    log.info("Рассылка напоминаний: отправлено %s", sent)
+    return sent
+
+
+def _seconds_until(hour: int) -> float:
+    now = datetime.now(MSK)
+    nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if nxt <= now:
+        nxt += timedelta(days=1)
+    return (nxt - now).total_seconds()
+
+
+async def reminder_loop() -> None:
+    while True:
+        await asyncio.sleep(_seconds_until(REMINDER_HOUR))
+        try:
+            await run_reminders()
+        except Exception as e:
+            log.error("reminder_loop: %s", e)
+        await asyncio.sleep(60)  # подстраховка от двойного срабатывания в тот же час
+
+
+async def handle_cron_reminders(request: web.Request) -> web.Response:
+    if request.query.get("secret") != CRON_SECRET:
+        return web.json_response({"ok": False}, status=403)
+    sent = await run_reminders()
+    return web.json_response({"ok": True, "sent": sent})
+
+
 async def run_api() -> None:
     app = web.Application()
     app.router.add_post("/progress", handle_progress)
     app.router.add_options("/progress", handle_options)
     app.router.add_get("/", handle_health)
+    app.router.add_get("/cron/reminders", handle_cron_reminders)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -200,7 +324,8 @@ async def run_api() -> None:
 async def main() -> None:
     await storage.init()
     await run_api()
-    log.info("Бот запущен. Курс: %s", COURSE_URL)
+    asyncio.create_task(reminder_loop())
+    log.info("Бот запущен. Курс: %s. Напоминания в %s:00 МСК", COURSE_URL, REMINDER_HOUR)
     await dp.start_polling(bot)
 
 

@@ -1,24 +1,39 @@
 /**
  * Apps Script для Google-таблицы прогресса онбординга.
- *
- * Установка:
- *   1) Открой свою таблицу → меню «Расширения» → «Apps Script».
- *   2) Удали пустой код, вставь весь этот файл.
- *   3) Вверху «Сохранить» (значок дискеты).
- *   4) Кнопка «Развернуть» (Deploy) → «Новое развёртывание» → тип «Веб-приложение»:
- *        • «Запуск от имени»: Я (твой аккаунт)
- *        • «У кого есть доступ»: Все (Anyone)
- *      → «Развернуть». Скопируй URL веб-приложения (.../exec) и пришли его мне.
- *   5) При первом деплое Google попросит «Разрешить доступ» — подтверди своим аккаунтом.
- *
- * Секрет ниже должен совпадать с APPS_SCRIPT_SECRET в .env бота.
+ * Расширения → Apps Script → вставить → Развернуть как Веб-приложение
+ * (запуск «от имени Я», доступ «Все»). При обновлении кода нужно
+ * Развернуть → Управление развёртываниями → ✏️ → Новая версия → Развернуть.
  */
 
 // ВАЖНО: впиши сюда тот же секрет, что в APPS_SCRIPT_SECRET у бота.
 // (в публичном репозитории настоящий секрет не храним)
 var SECRET = "ВПИШИ_СЕКРЕТ_КАК_В_БОТЕ";
-var TASKS = ["1","2","3","4","5","6","7","8","9","13","14","15","16"];
+var TASKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "13", "14", "15", "16"];
 
+function header() {
+  var h = ["user_id", "имя", "username", "старт", "обновлено"];
+  for (var i = 0; i < TASKS.length; i++) h.push("задание " + TASKS[i]);
+  h.push("вопросы");
+  h.push("напоминания");
+  return h;
+}
+
+function sheet_() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  var H = header();
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(H);
+  } else {
+    // добиваем недостающие колонки заголовка (например «напоминания»)
+    var cur = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    for (var i = 0; i < H.length; i++) {
+      if (cur[i] !== H[i]) sh.getRange(1, i + 1).setValue(H[i]);
+    }
+  }
+  return sh;
+}
+
+// --- Запись (от курса и от бота) -----------------------------------------
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
@@ -32,17 +47,9 @@ function doPost(e) {
   }
 }
 
-function header() {
-  var h = ["user_id", "имя", "username", "старт", "обновлено"];
-  for (var i = 0; i < TASKS.length; i++) h.push("задание " + TASKS[i]);
-  h.push("вопросы");
-  return h;
-}
-
 function handle(d) {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  var sh = sheet_();
   var H = header();
-  if (sh.getLastRow() === 0) sh.appendRow(H);
 
   var row = -1;
   if (sh.getLastRow() >= 2) {
@@ -54,7 +61,8 @@ function handle(d) {
   if (row === -1) {
     var newRow = [d.user_id, d.name, d.username, d.ts, d.ts];
     for (var t = 0; t < TASKS.length; t++) newRow.push("");
-    newRow.push("");
+    newRow.push(""); // вопросы
+    newRow.push(""); // напоминания
     sh.appendRow(newRow);
     row = sh.getLastRow();
   }
@@ -71,6 +79,48 @@ function handle(d) {
     var note = "[задание " + d.task + (d.stepTitle ? " / " + d.stepTitle : "") + "] " + (d.comment || "");
     sh.getRange(row, qcol).setValue((prev ? prev + "\n" : "") + note);
   }
+  if (d.status === "remind" && d.remind_key) {
+    var rcol = H.indexOf("напоминания") + 1;
+    var p = sh.getRange(row, rcol).getValue();
+    sh.getRange(row, rcol).setValue((p ? p + " " : "") + d.remind_key);
+  }
+}
+
+// --- Чтение (бот тянет список пользователей для рассылки) -----------------
+function doGet(e) {
+  if (!e || !e.parameter || e.parameter.secret !== SECRET) {
+    return json({ ok: false, error: "bad secret" });
+  }
+  var sh = sheet_();
+  var H = header();
+  var idxStart = H.indexOf("старт");
+  var idxRem = H.indexOf("напоминания");
+  var taskIdx = {};
+  for (var t = 0; t < TASKS.length; t++) taskIdx[TASKS[t]] = H.indexOf("задание " + TASKS[t]);
+
+  var users = [];
+  if (sh.getLastRow() >= 2) {
+    var data = sh.getRange(2, 1, sh.getLastRow() - 1, H.length).getValues();
+    for (var r = 0; r < data.length; r++) {
+      var row = data[r];
+      if (!row[0]) continue;
+      var done = [];
+      for (var k = 0; k < TASKS.length; k++) {
+        if (row[taskIdx[TASKS[k]]]) done.push(TASKS[k]);
+      }
+      var start = row[idxStart];
+      if (start instanceof Date) {
+        start = Utilities.formatDate(start, "Etc/GMT", "yyyy-MM-dd");
+      }
+      users.push({
+        user_id: String(row[0]),
+        start: String(start || ""),
+        reminders: String(row[idxRem] || ""),
+        done: done
+      });
+    }
+  }
+  return json({ ok: true, users: users });
 }
 
 function json(obj) {

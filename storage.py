@@ -120,6 +120,40 @@ def _record_local(payload: dict) -> None:
     log.info("[local] %s task=%s status=%s", uid, payload["task"], payload["status"])
 
 
+async def fetch_users() -> list:
+    """Прочитать из таблицы всех пользователей: user_id, старт, что пройдено,
+    какие напоминания уже отправлены. Нужен doGet в apps-script.gs."""
+    if not APPS_SCRIPT_URL or _session is None:
+        return []
+    try:
+        async with _session.get(
+            APPS_SCRIPT_URL,
+            params={"secret": APPS_SCRIPT_SECRET, "action": "users"},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as r:
+            text = await r.text()
+        data = json.loads(text)
+        return data.get("users", []) if data.get("ok") else []
+    except Exception as e:
+        log.error("fetch_users: %s", e)
+        return []
+
+
+async def mark_reminder(user_id: str, key: str) -> None:
+    """Отметить в таблице, что напоминание `key` этому пользователю отправлено."""
+    if _session is None:
+        return
+    await _record_apps_script({
+        "secret": APPS_SCRIPT_SECRET,
+        "user_id": str(user_id),
+        "status": "remind",
+        "remind_key": key,
+        "ts": _now(),
+        "task": "", "step": "", "stepTitle": "",
+        "name": "", "username": "", "comment": "",
+    })
+
+
 async def close() -> None:
     if _session is not None:
         await _session.close()
