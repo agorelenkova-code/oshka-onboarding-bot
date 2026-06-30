@@ -165,6 +165,23 @@ async def reg_group(message: Message, state: FSMContext) -> None:
     await send_course(message)
 
 
+@dp.message(Command("reset"))
+async def on_reset(message: Message, state: FSMContext) -> None:
+    """Сброс прогресса для тестов."""
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🧹 Сбросить прогресс уроков",
+                             web_app=WebAppInfo(url=f"{COURSE_URL}?reset=1"))
+    ]])
+    await message.answer(
+        "<b>Сброс для теста</b>\n"
+        "1) Нажми кнопку ниже — очистит галочки прохождения уроков в приложении.\n"
+        "2) Чтобы заново пройти регистрацию (ФИО/класс) и обнулить напоминания — "
+        "удали свою строку в Google-таблице.",
+        reply_markup=kb,
+    )
+
+
 @dp.message(Command("id"))
 async def on_id(message: Message) -> None:
     """Помощник: узнать свой chat_id для ADMIN_CHAT_ID."""
