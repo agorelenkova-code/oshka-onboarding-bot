@@ -92,21 +92,24 @@ class Reg(StatesGroup):
 
 
 # --- Команды бота -----------------------------------------------------------
-async def send_welcome(message: Message, fio: str = "") -> None:
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🚀 Открыть онбординг", web_app=WebAppInfo(url=COURSE_URL))
-    ]])
-    who = (fio.split()[0] if fio else
-           (message.from_user.first_name if message.from_user else ""))
+def intro_text(who: str = "") -> str:
     hi = f"👋 Привет, {who}!" if who else "👋 Привет!"
-    await message.answer(
+    return (
         f"{hi} Добро пожаловать в <b>онлайн-школу</b> 🎓\n\n"
         "Я бот-помощник по онбордингу. <b>Моя задача — провести тебя через все этапы "
         "адаптации в школе</b>, чтобы с первых дней всё было понятно и ничего важного "
         "не потерялось.\n\n"
         "Вместе шаг за шагом разберёмся, как войти на платформу, настроить Zoom, "
         "проходить уроки и сдавать аттестации. А ещё я сориентирую по "
-        "<b>важным этапам зачисления</b>, чтобы не пропустить ничего по срокам.\n\n"
+        "<b>важным этапам зачисления</b>, чтобы не пропустить ничего по срокам."
+    )
+
+
+async def send_course(message: Message) -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🚀 Открыть онбординг", web_app=WebAppInfo(url=COURSE_URL))
+    ]])
+    await message.answer(
         "<b>Как это работает:</b>\n"
         "• Нажми кнопку ниже — откроется интерактивный курс.\n"
         "• Проходи шаги по порядку и отмечай выполненные ✅\n"
@@ -125,10 +128,15 @@ async def on_start(message: Message, state: FSMContext) -> None:
         await storage.touch_user(message.from_user.model_dump())
         user = await storage.get_user(message.from_user.id)
         if user and str(user.get("fio", "")).strip():
-            await send_welcome(message, user["fio"])
+            # уже знакомы — сразу приветствие + курс
+            await message.answer(intro_text(user["fio"].split()[0]))
+            await send_course(message)
             return
+    # сначала приветствие, потом знакомство
+    who = message.from_user.first_name if message.from_user else ""
+    await message.answer(intro_text(who))
     await message.answer(
-        "Рады знакомству! 🙌 Давай оформим тебя в онбординг.\n\n"
+        "Прежде чем начать, давай познакомимся 🙌\n"
         "Напиши, пожалуйста, своё <b>имя и фамилию</b>:"
     )
     await state.set_state(Reg.fio)
@@ -153,8 +161,8 @@ async def reg_group(message: Message, state: FSMContext) -> None:
     await state.clear()
     if message.from_user:
         await storage.register(message.from_user.model_dump(), fio, group)
-    await message.answer(f"Записал: <b>{fio}</b>, {group}. Спасибо! 🎉")
-    await send_welcome(message, fio)
+    await message.answer(f"Готово! Записал: <b>{fio}</b>, {group} ✅\n\nТеперь можно начинать 👇")
+    await send_course(message)
 
 
 @dp.message(Command("id"))
