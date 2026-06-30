@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qsl
 
@@ -204,15 +204,24 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 # --- Напоминания по расписанию -------------------------------------------
-def _parse_start(value) -> Optional["datetime.date"]:
+def _parse_start(value) -> Optional[date]:
+    """Понимает разные форматы даты из таблицы:
+    '2026-06-25 13:30', ISO, 'Thu Jun 25 2026 13:30:00 GMT+0300', '25.06.2026'."""
     if not value:
         return None
-    s = str(value).strip()[:10]
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+    s = str(value).strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)               # 2026-06-25 / ISO
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"[A-Za-z]{3}\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})", s)  # Thu Jun 25 2026
+    if m:
         try:
-            return datetime.strptime(s, fmt).date()
+            return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%b %d %Y").date()
         except ValueError:
-            continue
+            pass
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", s)             # 25.06.2026
+    if m:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
     return None
 
 
