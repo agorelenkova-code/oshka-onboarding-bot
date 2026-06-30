@@ -58,6 +58,8 @@ log = logging.getLogger("onboarding-bot")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 COURSE_URL = os.environ.get("COURSE_URL", "https://example.netlify.app").rstrip("/")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0") or "0")
+# Чат кураторов: куда падают вопросы «Не получилось». Если не задан — личка админа.
+CURATORS_CHAT_ID = int(os.environ.get("CURATORS_CHAT_ID", "0") or "0") or ADMIN_CHAT_ID
 PORT = int(os.environ.get("PORT", "8080"))
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "10"))  # час рассылки, МСК
 CRON_SECRET = os.environ.get("APPS_SCRIPT_SECRET", "")      # защита ручного триггера
@@ -227,12 +229,15 @@ async def handle_progress(request: web.Request) -> web.Response:
 
     await storage.record(user, task, status, comment, step, step_title)
 
-    if status == "question" and ADMIN_CHAT_ID:
-        name = user.get("first_name", "Новичок")
+    if status == "question" and CURATORS_CHAT_ID:
+        rec = await storage.get_user(user.get("id"))
+        fio = (rec.get("fio") if rec else "") or user.get("first_name", "Новичок")
+        grp = (rec.get("group") if rec else "") or ""
         uname = f"@{user['username']}" if user.get("username") else f"id {user.get('id')}"
+        who = f"{fio} ({grp})" if grp else fio
         text = (
             "❓ <b>Вопрос по онбордингу</b>\n"
-            f"От: {name} ({uname})\n"
+            f"От: <b>{who}</b> — {uname}\n"
             f"Задание: <b>{task}</b>"
         )
         if step_title:
@@ -240,7 +245,7 @@ async def handle_progress(request: web.Request) -> web.Response:
         if comment:
             text += f"\nКомментарий: {comment}"
         try:
-            await bot.send_message(ADMIN_CHAT_ID, text)
+            await bot.send_message(CURATORS_CHAT_ID, text)
         except Exception as e:  # уведомление не должно ронять запись прогресса
             log.warning("Не смог уведомить наставника: %s", e)
 
