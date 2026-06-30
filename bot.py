@@ -165,7 +165,7 @@ async def reg_fio(message: Message, state: FSMContext) -> None:
         await message.answer("Напиши, пожалуйста, имя и фамилию текстом 🙂")
         return
     await state.update_data(fio=fio)
-    await message.answer("Отлично! Теперь напиши свой <b>класс / группу</b>:")
+    await message.answer("Отлично! Теперь напиши свой <b>класс</b>:")
     await state.set_state(Reg.group)
 
 
