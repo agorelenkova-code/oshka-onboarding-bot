@@ -27,6 +27,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -78,22 +81,22 @@ if not BOT_TOKEN:
     raise SystemExit("Не задан BOT_TOKEN. Смотри .env.example / README.md")
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
+
+
+class Reg(StatesGroup):
+    fio = State()
+    group = State()
 
 
 # --- Команды бота -----------------------------------------------------------
-@dp.message(CommandStart())
-async def on_start(message: Message) -> None:
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(
-                text="🚀 Открыть онбординг",
-                web_app=WebAppInfo(url=COURSE_URL),
-            )]
-        ]
-    )
-    name = message.from_user.first_name if message.from_user else ""
-    hi = f"👋 Привет, {name}!" if name else "👋 Привет!"
+async def send_welcome(message: Message, fio: str = "") -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🚀 Открыть онбординг", web_app=WebAppInfo(url=COURSE_URL))
+    ]])
+    who = (fio.split()[0] if fio else
+           (message.from_user.first_name if message.from_user else ""))
+    hi = f"👋 Привет, {who}!" if who else "👋 Привет!"
     await message.answer(
         f"{hi} Добро пожаловать в <b>онлайн-школу</b> 🎓\n\n"
         "Я бот-помощник по онбордингу. <b>Моя задача — провести тебя через все этапы "
@@ -111,8 +114,45 @@ async def on_start(message: Message) -> None:
         "Поехали 👇",
         reply_markup=kb,
     )
+
+
+@dp.message(CommandStart())
+async def on_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     if message.from_user:
         await storage.touch_user(message.from_user.model_dump())
+        user = await storage.get_user(message.from_user.id)
+        if user and str(user.get("fio", "")).strip():
+            await send_welcome(message, user["fio"])
+            return
+    await message.answer(
+        "Рады знакомству! 🙌 Давай оформим тебя в онбординг.\n\n"
+        "Напиши, пожалуйста, своё <b>имя и фамилию</b>:"
+    )
+    await state.set_state(Reg.fio)
+
+
+@dp.message(Reg.fio)
+async def reg_fio(message: Message, state: FSMContext) -> None:
+    fio = (message.text or "").strip()
+    if len(fio) < 2:
+        await message.answer("Напиши, пожалуйста, имя и фамилию текстом 🙂")
+        return
+    await state.update_data(fio=fio)
+    await message.answer("Отлично! Теперь напиши свой <b>класс / группу</b>:")
+    await state.set_state(Reg.group)
+
+
+@dp.message(Reg.group)
+async def reg_group(message: Message, state: FSMContext) -> None:
+    group = (message.text or "").strip()
+    data = await state.get_data()
+    fio = data.get("fio", "")
+    await state.clear()
+    if message.from_user:
+        await storage.register(message.from_user.model_dump(), fio, group)
+    await message.answer(f"Записал: <b>{fio}</b>, {group}. Спасибо! 🎉")
+    await send_welcome(message, fio)
 
 
 @dp.message(Command("id"))

@@ -1,12 +1,10 @@
 /**
  * Apps Script для Google-таблицы прогресса онбординга.
- * Расширения → Apps Script → вставить → Развернуть как Веб-приложение
- * (запуск «от имени Я», доступ «Все»). При обновлении кода нужно
- * Развернуть → Управление развёртываниями → ✏️ → Новая версия → Развернуть.
+ * При обновлении кода: Развернуть → Управление развёртываниями → ✏️ →
+ * Версия: Новая версия → Развернуть.
  */
 
 // ВАЖНО: впиши сюда тот же секрет, что в APPS_SCRIPT_SECRET у бота.
-// (в публичном репозитории настоящий секрет не храним)
 var SECRET = "ВПИШИ_СЕКРЕТ_КАК_В_БОТЕ";
 var TASKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "13", "14", "15", "16"];
 
@@ -15,6 +13,8 @@ function header() {
   for (var i = 0; i < TASKS.length; i++) h.push("задание " + TASKS[i]);
   h.push("вопросы");
   h.push("напоминания");
+  h.push("ФИО");
+  h.push("класс");
   return h;
 }
 
@@ -24,8 +24,7 @@ function sheet_() {
   if (sh.getLastRow() === 0) {
     sh.appendRow(H);
   } else {
-    // добиваем недостающие колонки заголовка (например «напоминания»)
-    var cur = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    var cur = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), H.length)).getValues()[0];
     for (var i = 0; i < H.length; i++) {
       if (cur[i] !== H[i]) sh.getRange(1, i + 1).setValue(H[i]);
     }
@@ -33,7 +32,6 @@ function sheet_() {
   return sh;
 }
 
-// --- Запись (от курса и от бота) -----------------------------------------
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
@@ -50,7 +48,6 @@ function doPost(e) {
 function handle(d) {
   var sh = sheet_();
   var H = header();
-
   var row = -1;
   if (sh.getLastRow() >= 2) {
     var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
@@ -63,12 +60,18 @@ function handle(d) {
     for (var t = 0; t < TASKS.length; t++) newRow.push("");
     newRow.push(""); // вопросы
     newRow.push(""); // напоминания
+    newRow.push(""); // ФИО
+    newRow.push(""); // класс
     sh.appendRow(newRow);
     row = sh.getLastRow();
   }
 
   sh.getRange(row, H.indexOf("обновлено") + 1).setValue(d.ts);
 
+  if (d.status === "register") {
+    if (d.fio) sh.getRange(row, H.indexOf("ФИО") + 1).setValue(d.fio);
+    if (d.group) sh.getRange(row, H.indexOf("класс") + 1).setValue(d.group);
+  }
   if (d.status === "done" && !d.step && d.task) {
     var col = H.indexOf("задание " + d.task) + 1;
     if (col > 0) sh.getRange(row, col).setValue("✅");
@@ -86,7 +89,6 @@ function handle(d) {
   }
 }
 
-// --- Чтение (бот тянет список пользователей для рассылки) -----------------
 function doGet(e) {
   if (!e || !e.parameter || e.parameter.secret !== SECRET) {
     return json({ ok: false, error: "bad secret" });
@@ -95,6 +97,8 @@ function doGet(e) {
   var H = header();
   var idxStart = H.indexOf("старт");
   var idxRem = H.indexOf("напоминания");
+  var idxFio = H.indexOf("ФИО");
+  var idxClass = H.indexOf("класс");
   var taskIdx = {};
   for (var t = 0; t < TASKS.length; t++) taskIdx[TASKS[t]] = H.indexOf("задание " + TASKS[t]);
 
@@ -109,13 +113,13 @@ function doGet(e) {
         if (row[taskIdx[TASKS[k]]]) done.push(TASKS[k]);
       }
       var start = row[idxStart];
-      if (start instanceof Date) {
-        start = Utilities.formatDate(start, "Etc/GMT", "yyyy-MM-dd");
-      }
+      if (start instanceof Date) start = Utilities.formatDate(start, "Etc/GMT", "yyyy-MM-dd");
       users.push({
         user_id: String(row[0]),
         start: String(start || ""),
         reminders: String(row[idxRem] || ""),
+        fio: String(row[idxFio] || ""),
+        group: String(row[idxClass] || ""),
         done: done
       });
     }

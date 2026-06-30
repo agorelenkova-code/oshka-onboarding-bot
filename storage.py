@@ -139,6 +139,29 @@ async def fetch_users() -> list:
         return []
 
 
+async def get_user(uid) -> Optional[dict]:
+    """Найти одного пользователя в таблице по user_id (для проверки регистрации)."""
+    for u in await fetch_users():
+        if str(u.get("user_id")) == str(uid):
+            return u
+    return None
+
+
+async def register(user: dict, fio: str, group: str) -> None:
+    """Записать ФИО и класс/группу (мини-регистрация при первом /start)."""
+    await _record_apps_script({
+        "secret": APPS_SCRIPT_SECRET,
+        "user_id": str(user.get("id", "")),
+        "name": user.get("first_name", ""),
+        "username": user.get("username", ""),
+        "status": "register",
+        "fio": fio,
+        "group": group,
+        "ts": _now(),
+        "task": "", "step": "", "stepTitle": "", "comment": "", "remind_key": "",
+    })
+
+
 async def mark_reminder(user_id: str, key: str) -> None:
     """Отметить в таблице, что напоминание `key` этому пользователю отправлено."""
     if _session is None:
