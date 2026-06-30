@@ -27,9 +27,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -99,12 +96,7 @@ if not BOT_TOKEN:
     raise SystemExit("Не задан BOT_TOKEN. Смотри .env.example / README.md")
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher(storage=MemoryStorage())
-
-
-class Reg(StatesGroup):
-    fio = State()
-    group = State()
+dp = Dispatcher()
 
 
 # --- Команды бота -----------------------------------------------------------
@@ -138,53 +130,18 @@ async def send_course(message: Message) -> None:
 
 
 @dp.message(CommandStart())
-async def on_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
+async def on_start(message: Message) -> None:
+    # Имя/класс спрашиваем не в чате, а в приложении (на стартовом экране курса).
     if message.from_user:
         await storage.touch_user(message.from_user.model_dump())
-        user = await storage.get_user(message.from_user.id)
-        if user and str(user.get("fio", "")).strip():
-            # уже знакомы — сразу приветствие + курс
-            await message.answer(intro_text(user["fio"].split()[0]))
-            await send_course(message)
-            return
-    # сначала приветствие, потом знакомство
     who = message.from_user.first_name if message.from_user else ""
     await message.answer(intro_text(who))
-    await message.answer(
-        "Прежде чем начать, давай познакомимся 🙌\n"
-        "Напиши, пожалуйста, своё <b>имя и фамилию</b>:"
-    )
-    await state.set_state(Reg.fio)
-
-
-@dp.message(Reg.fio)
-async def reg_fio(message: Message, state: FSMContext) -> None:
-    fio = (message.text or "").strip()
-    if len(fio) < 2:
-        await message.answer("Напиши, пожалуйста, имя и фамилию текстом 🙂")
-        return
-    await state.update_data(fio=fio)
-    await message.answer("Отлично! Теперь напиши свой <b>класс</b>:")
-    await state.set_state(Reg.group)
-
-
-@dp.message(Reg.group)
-async def reg_group(message: Message, state: FSMContext) -> None:
-    group = (message.text or "").strip()
-    data = await state.get_data()
-    fio = data.get("fio", "")
-    await state.clear()
-    if message.from_user:
-        await storage.register(message.from_user.model_dump(), fio, group)
-    await message.answer(f"Готово! Записал: <b>{fio}</b>, {group} ✅\n\nТеперь можно начинать 👇")
     await send_course(message)
 
 
 @dp.message(Command("reset"))
-async def on_reset(message: Message, state: FSMContext) -> None:
+async def on_reset(message: Message) -> None:
     """Сброс прогресса для тестов."""
-    await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🧹 Сбросить прогресс уроков",
                              web_app=WebAppInfo(url=f"{COURSE_URL}?reset=1"))
@@ -261,8 +218,16 @@ async def handle_progress(request: web.Request) -> web.Response:
         )
 
     user = data["user"]
+    status = body.get("status", "done")  # "done" | "question" | "register"
+
+    # Регистрация из приложения: ФИО + класс со стартового экрана курса
+    if status == "register":
+        fio = str(body.get("fio", ""))[:200]
+        group = str(body.get("class", "") or body.get("group", ""))[:100]
+        await storage.register(user, fio, group)
+        return web.json_response({"ok": True}, headers=CORS_HEADERS)
+
     task = str(body.get("task", "?"))
-    status = body.get("status", "done")  # "done" | "question"
     comment = str(body.get("comment", ""))[:500]
     step = body.get("step")
     step = str(step) if step else None
