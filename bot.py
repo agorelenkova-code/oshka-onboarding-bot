@@ -107,6 +107,12 @@ VIS = {
 }
 
 
+TARIFF_LABEL = {
+    "sz": "СЗ", "chsz": "ЧСЗ", "bz": "БЗ", "veb": "Вебинар",
+    "oa": "Орг. аттестации", "dostup": "Доступ",
+}
+
+
 def _class_nums(s) -> list:
     return [int(x) for x in re.findall(r"\d+", str(s or ""))]
 
@@ -371,8 +377,9 @@ async def send_curator_digest(items: list) -> bool:
         "Напишите со своей почты тем, кто ещё не прошёл этап онбординга:\n",
     ]
     for i, d in enumerate(items, 1):
+        tlabel = TARIFF_LABEL.get(d["tariff"], d["tariff"])
         extra = " · ".join(x for x in [f"{d['group']} кл." if d["group"] else "",
-                                       d["tariff"]] if x)
+                                       tlabel] if x)
         link = _course_link(d, d["email"])
         lines.append(
             f"{i}. <b>{d['name']}</b>\n"
