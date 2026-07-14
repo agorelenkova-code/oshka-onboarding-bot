@@ -6,7 +6,10 @@
 
 // ВАЖНО: впиши сюда тот же секрет, что в APPS_SCRIPT_SECRET у бота.
 var SECRET = "ВПИШИ_СЕКРЕТ_КАК_В_БОТЕ";
-var TASKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "13", "14", "15", "16"];
+// Токен для веб-прогресса (пользователи без Telegram). Такой же, как window.TG_WEB_TOKEN в config.js.
+// Разрешает ТОЛЬКО дозапись прогресса (doPost), чтение (doGet) по-прежнему требует SECRET.
+var WEB_TOKEN = "qR6Fg9Q32QfoMAmLO4LsggcI";
+var TASKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "13", "14", "15", "16", "18", "19", "20", "21"];
 
 function header() {
   var h = ["user_id", "имя", "username", "старт", "обновлено"];
@@ -15,6 +18,8 @@ function header() {
   h.push("напоминания");
   h.push("ФИО");
   h.push("класс");
+  h.push("тариф");
+  h.push("роль");
   return h;
 }
 
@@ -35,7 +40,8 @@ function sheet_() {
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-    if (data.secret !== SECRET) return json({ ok: false, error: "bad secret" });
+    var okAuth = (data.secret === SECRET) || (WEB_TOKEN && data.webtoken === WEB_TOKEN);
+    if (!okAuth) return json({ ok: false, error: "bad auth" });
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try { handle(data); } finally { lock.releaseLock(); }
@@ -62,6 +68,8 @@ function handle(d) {
     newRow.push(""); // напоминания
     newRow.push(""); // ФИО
     newRow.push(""); // класс
+    newRow.push(""); // тариф
+    newRow.push(""); // роль
     sh.appendRow(newRow);
     row = sh.getLastRow();
   }
@@ -71,6 +79,8 @@ function handle(d) {
   if (d.status === "register") {
     if (d.fio) sh.getRange(row, H.indexOf("ФИО") + 1).setValue(d.fio);
     if (d.group) sh.getRange(row, H.indexOf("класс") + 1).setValue(d.group);
+    if (d.tariff) sh.getRange(row, H.indexOf("тариф") + 1).setValue(d.tariff);
+    if (d.role) sh.getRange(row, H.indexOf("роль") + 1).setValue(d.role);
   }
   if (d.status === "done" && !d.step && d.task) {
     var col = H.indexOf("задание " + d.task) + 1;
@@ -93,12 +103,67 @@ function doGet(e) {
   if (!e || !e.parameter || e.parameter.secret !== SECRET) {
     return json({ ok: false, error: "bad secret" });
   }
+  var action = e.parameter.action || "users";
+
+  // Чтение вкладок. Необязательный ?file=<id> — читать другой файл (по умолчанию текущий).
+  // ?action=sheets[&file=…]        — список вкладок
+  // ?action=sheet&name=…[&file=…]  — содержимое вкладки по имени
+  if (action === "sheets" || action === "sheet") {
+    var ss;
+    try {
+      ss = e.parameter.file ? SpreadsheetApp.openById(e.parameter.file)
+                            : SpreadsheetApp.getActiveSpreadsheet();
+    } catch (err) {
+      return json({ ok: false, error: "no access to file: " + String(err) });
+    }
+    if (action === "sheets") {
+      return json({ ok: true, sheets: ss.getSheets().map(function (s) { return s.getName(); }) });
+    }
+    var target = ss.getSheetByName(e.parameter.name || "");
+    if (!target) return json({ ok: false, error: "no sheet: " + (e.parameter.name || "") });
+    return json({ ok: true, name: e.parameter.name, rows: target.getDataRange().getValues() });
+  }
+
+  // Картинки из Google-дока с учётом ВКЛАДОК (tabs):
+  //  ?action=doctabs&file=<docId>                — список вкладок + число картинок
+  //  ?action=docimg&file=<docId>&tab=<t>&i=<n>   — картинка n из вкладки t (base64)
+  if (action === "doctabs" || action === "docimg") {
+    var doc;
+    try { doc = DocumentApp.openById(e.parameter.file); }
+    catch (err) { return json({ ok: false, error: "no doc: " + String(err) }); }
+    var tabs = [];
+    function walk(tb) {
+      tabs.push(tb);
+      var ch = tb.getChildTabs ? tb.getChildTabs() : [];
+      for (var j = 0; j < ch.length; j++) walk(ch[j]);
+    }
+    var top = doc.getTabs ? doc.getTabs() : [];
+    for (var i = 0; i < top.length; i++) walk(top[i]);
+    function bodyOf(ti) {
+      return tabs.length ? tabs[ti].asDocumentTab().getBody() : doc.getBody();
+    }
+    if (action === "doctabs") {
+      if (!tabs.length) return json({ ok: true, tabs: [{ title: "(без вкладок)", images: doc.getBody().getImages().length }] });
+      return json({ ok: true, tabs: tabs.map(function (t) {
+        return { title: t.getTitle(), images: t.asDocumentTab().getBody().getImages().length };
+      }) });
+    }
+    var ti = parseInt(e.parameter.tab || "0", 10);
+    var imgs = bodyOf(ti).getImages();
+    var k = parseInt(e.parameter.i, 10);
+    if (isNaN(k) || k < 0 || k >= imgs.length) return json({ ok: false, error: "bad index" });
+    var blob = imgs[k].getBlob();
+    return json({ ok: true, mime: blob.getContentType(), b64: Utilities.base64Encode(blob.getBytes()) });
+  }
+
   var sh = sheet_();
   var H = header();
   var idxStart = H.indexOf("старт");
   var idxRem = H.indexOf("напоминания");
   var idxFio = H.indexOf("ФИО");
   var idxClass = H.indexOf("класс");
+  var idxTariff = H.indexOf("тариф");
+  var idxRole = H.indexOf("роль");
   var taskIdx = {};
   for (var t = 0; t < TASKS.length; t++) taskIdx[TASKS[t]] = H.indexOf("задание " + TASKS[t]);
 
@@ -120,6 +185,8 @@ function doGet(e) {
         reminders: String(row[idxRem] || ""),
         fio: String(row[idxFio] || ""),
         group: String(row[idxClass] || ""),
+        tariff: String(row[idxTariff] || ""),
+        role: String(row[idxRole] || ""),
         done: done
       });
     }

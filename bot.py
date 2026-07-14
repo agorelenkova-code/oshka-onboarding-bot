@@ -84,6 +84,49 @@ STAGES = [
      "blocks": [13, 14, 15, 16, 19, 20]},
 ]
 
+# Матрица видимости блоков — КОПИЯ VIS из курса (index.html / tg-onboarding.js).
+# Нужна, чтобы напоминания не звали в скрытый под тариф/роль/класс блок.
+# При изменении матрицы в курсе — синхронизировать здесь.
+_ALL_T = ["sz", "chsz", "bz", "veb", "oa", "dostup"]
+VIS = {
+    1:  {"t": _ALL_T, "r": ["parent", "student"]},
+    2:  {"t": _ALL_T, "r": ["parent", "student"]},
+    4:  {"t": _ALL_T, "r": ["parent", "student"]},
+    21: {"t": _ALL_T, "r": ["parent", "student"]},
+    3:  {"t": ["sz", "chsz", "bz", "veb"], "r": ["parent", "student"]},
+    18: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    5:  {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    8:  {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    9:  {"t": ["sz", "chsz", "veb", "oa"], "r": ["parent"]},
+    13: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    14: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    15: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    16: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+    19: {"t": ["sz", "veb"], "r": ["parent", "student"], "cls": [9, 11]},
+    20: {"t": ["sz", "chsz", "bz", "veb", "oa"], "r": ["parent", "student"]},
+}
+
+
+def _class_nums(s) -> list:
+    return [int(x) for x in re.findall(r"\d+", str(s or ""))]
+
+
+def is_visible(task_id, role: str, tariff: str, group) -> bool:
+    """Виден ли блок этому профилю. Пустые тариф/роль/класс НЕ подавляют
+    (у старых записей их нет — тогда ведём себя как раньше, без фильтра)."""
+    rule = VIS.get(int(task_id))
+    if not rule:
+        return True
+    if tariff and rule.get("t") and tariff not in rule["t"]:
+        return False
+    if role and rule.get("r") and role not in rule["r"]:
+        return False
+    if rule.get("cls"):
+        ns = _class_nums(group)
+        if ns and not any(n in rule["cls"] for n in ns):
+            return False
+    return True
+
 if not BOT_TOKEN:
     raise SystemExit("Не задан BOT_TOKEN. Смотри .env.example / README.md")
 
@@ -212,11 +255,13 @@ async def handle_progress(request: web.Request) -> web.Response:
     user = data["user"]
     status = body.get("status", "done")  # "done" | "question" | "register"
 
-    # Регистрация из приложения: ФИО + класс со стартового экрана курса
+    # Регистрация из приложения: ФИО + класс + тариф + роль со стартового экрана курса
     if status == "register":
         fio = str(body.get("fio", ""))[:200]
         group = str(body.get("class", "") or body.get("group", ""))[:100]
-        await storage.register(user, fio, group)
+        tariff = str(body.get("tariff", ""))[:20]
+        role = str(body.get("role", ""))[:20]
+        await storage.register(user, fio, group, tariff, role)
         return web.json_response({"ok": True}, headers=CORS_HEADERS)
 
     task = str(body.get("task", "?"))
@@ -315,24 +360,29 @@ async def run_reminders() -> int:
         day_num = (today - start).days + 1
         done = {str(x) for x in u.get("done", [])}
         sent_keys = set(re.split(r"[\s,;]+", str(u.get("reminders", "")).strip()))
+        role = str(u.get("role", ""))
+        tariff = str(u.get("tariff", ""))
+        group = u.get("group", "")
 
-        # Ищем самый ранний открытый и НЕпройденный этап.
-        # Этап «пройден», если сделаны все его блоки ЛИБО начат более поздний этап
-        # (так блоки, скрытые под тариф/роль, не застопорят напоминания).
-        # Идём от позднего этапа к раннему, накапливая блоки поздних этапов.
+        # Ищем самый ранний открытый и НЕпройденный этап — только по ВИДИМЫМ
+        # блокам профиля (роль·тариф·класс). Этап без видимых блоков пропускаем
+        # (напр. тариф «Доступ» видит только этап 1, ученик — не видит «Документы»).
+        # Этап «пройден» = все его видимые блоки сделаны ЛИБО начат более поздний этап.
         target = None
+        target_block = None
         later_blocks: set = set()
         for st in reversed(STAGES):
-            blocks = [str(b) for b in st["blocks"]]
-            cleared = all(b in done for b in blocks) or any(b in done for b in later_blocks)
+            vis_blocks = [str(b) for b in st["blocks"]
+                          if is_visible(b, role, tariff, group)]
+            if not vis_blocks:
+                continue  # этап целиком не для этого профиля
+            cleared = all(b in done for b in vis_blocks) or any(b in done for b in later_blocks)
             if not cleared and day_num >= st["day"]:
                 target = st  # перезапишется более ранним этапом на след. итерациях
-            later_blocks.update(blocks)
+                target_block = next((b for b in vis_blocks if b not in done), vis_blocks[0])
+            later_blocks.update(vis_blocks)
         if target is None:
             continue
-
-        # ссылка — на первый непройденный блок этапа (в порядке курса), иначе первый блок
-        target_block = next((b for b in target["blocks"] if str(b) not in done), target["blocks"][0])
 
         due_key = f"{target['key']}:due"
         follow_key = f"{target['key']}:follow"

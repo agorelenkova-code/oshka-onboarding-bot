@@ -147,8 +147,9 @@ async def get_user(uid) -> Optional[dict]:
     return None
 
 
-async def register(user: dict, fio: str, group: str) -> None:
-    """Записать ФИО и класс/группу (мини-регистрация при первом /start)."""
+async def register(user: dict, fio: str, group: str,
+                   tariff: str = "", role: str = "") -> None:
+    """Записать ФИО, класс и (для фильтра напоминаний) тариф+роль."""
     await _record_apps_script({
         "secret": APPS_SCRIPT_SECRET,
         "user_id": str(user.get("id", "")),
@@ -157,6 +158,8 @@ async def register(user: dict, fio: str, group: str) -> None:
         "status": "register",
         "fio": fio,
         "group": group,
+        "tariff": tariff,
+        "role": role,
         "ts": _now(),
         "task": "", "step": "", "stepTitle": "", "comment": "", "remind_key": "",
     })
