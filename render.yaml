@@ -19,17 +19,6 @@ services:
         sync: false
       - key: COURSE_URL
         value: https://oshka-onboarding.netlify.app
-      # SMTP для писем-напоминаний веб-пользователям (без Telegram). Необязательно:
-      # если не заполнить — письма просто не шлются, Telegram-напоминания работают.
-      - key: SMTP_HOST
+      # Чат кураторов: туда падают вопросы и ежедневная сводка «кому напомнить».
+      - key: CURATORS_CHAT_ID
         sync: false
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: SMTP_FROM
-        sync: false
-      - key: SMTP_FROM_NAME
-        value: Онлайн-школа №1
