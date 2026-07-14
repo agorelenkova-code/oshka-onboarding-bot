@@ -309,6 +309,41 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "service": "onboarding-bot"})
 
 
+async def handle_web_question(request: web.Request) -> web.Response:
+    """Вопрос от веб-пользователя (без Telegram). Дёргается из Apps Script с общим
+    секретом; бот пересылает вопрос в чат кураторов (токен остаётся только в боте)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad json"}, status=400)
+    if body.get("secret") != CRON_SECRET:
+        return web.json_response({"ok": False, "error": "bad secret"}, status=403)
+    if not CURATORS_CHAT_ID:
+        return web.json_response({"ok": True, "note": "no curators chat"})
+    name = str(body.get("name", ""))[:200] or "Без имени"
+    email = str(body.get("email", ""))[:200]
+    group = str(body.get("group", ""))[:100]
+    task = str(body.get("task", "?"))[:20]
+    step_title = str(body.get("stepTitle", ""))[:200]
+    comment = str(body.get("comment", ""))[:500]
+    who = f"{name} ({group})" if group else name
+    text = (
+        "❓ <b>Вопрос по онбордингу</b> — 🌐 без Telegram\n"
+        f"От: <b>{who}</b>" + (f" — ✉️ {email}" if email else "") + "\n"
+        f"Задание: <b>{task}</b>"
+    )
+    if step_title:
+        text += f"\nШаг: {step_title}"
+    if comment:
+        text += f"\nКомментарий: {comment}"
+    try:
+        await bot.send_message(CURATORS_CHAT_ID, text)
+    except Exception as e:
+        log.warning("Веб-вопрос не переслан кураторам: %s", e)
+        return web.json_response({"ok": False, "error": "send failed"})
+    return web.json_response({"ok": True})
+
+
 # --- Напоминания по расписанию -------------------------------------------
 def _parse_start(value) -> Optional[date]:
     """Понимает разные форматы даты из таблицы:
@@ -508,6 +543,7 @@ async def run_api() -> None:
     app = web.Application()
     app.router.add_post("/progress", handle_progress)
     app.router.add_options("/progress", handle_options)
+    app.router.add_post("/web-question", handle_web_question)
     app.router.add_get("/", handle_health)
     app.router.add_get("/cron/reminders", handle_cron_reminders)
     runner = web.AppRunner(app)

@@ -9,6 +9,8 @@ var SECRET = "ВПИШИ_СЕКРЕТ_КАК_В_БОТЕ";
 // Токен для веб-прогресса (пользователи без Telegram). Такой же, как window.TG_WEB_TOKEN в config.js.
 // Разрешает ТОЛЬКО дозапись прогресса (doPost), чтение (doGet) по-прежнему требует SECRET.
 var WEB_TOKEN = "qR6Fg9Q32QfoMAmLO4LsggcI";
+// Куда бот принимает веб-вопросы, чтобы переслать их кураторам в Telegram.
+var BOT_NOTIFY_URL = "https://oshka-onboarding-bot.onrender.com/web-question";
 var TASKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "13", "14", "15", "16", "18", "19", "20", "21"];
 
 function header() {
@@ -91,6 +93,24 @@ function handle(d) {
     var prev = sh.getRange(row, qcol).getValue();
     var note = "[задание " + d.task + (d.stepTitle ? " / " + d.stepTitle : "") + "] " + (d.comment || "");
     sh.getRange(row, qcol).setValue((prev ? prev + "\n" : "") + note);
+    // Веб-вопрос (без Telegram) — просим бота переслать его в чат кураторов.
+    if (BOT_NOTIFY_URL && String(d.user_id || "").indexOf("web:") === 0) {
+      var fio = sh.getRange(row, H.indexOf("ФИО") + 1).getValue();
+      var klass = sh.getRange(row, H.indexOf("класс") + 1).getValue();
+      try {
+        UrlFetchApp.fetch(BOT_NOTIFY_URL, {
+          method: "post", contentType: "application/json",
+          payload: JSON.stringify({
+            secret: SECRET,
+            name: fio || d.name || "",
+            email: String(d.user_id).replace(/^web:/, ""),
+            group: klass || "",
+            task: d.task, stepTitle: d.stepTitle || "", comment: d.comment || ""
+          }),
+          muteHttpExceptions: true
+        });
+      } catch (e2) { /* вопрос уже в таблице — пинг best-effort */ }
+    }
   }
   if (d.status === "remind" && d.remind_key) {
     var rcol = H.indexOf("напоминания") + 1;
